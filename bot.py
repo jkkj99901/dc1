@@ -1347,18 +1347,18 @@ async def on_message(message):
     if message.author.bot: 
         return
        
-    @bot.event
+@bot.event
 async def on_message(message):
     if message.author.bot: 
         return
-        
+
     # --- AUTO TRANSLATE ---
     translate_data = load_json(TRANSLATE_FILE, dict)
     is_translate_cmd = message.content.lower().startswith(("!sedse translate", "!translate", "!autotranslate"))
     
     if not is_translate_cmd and str(message.channel.id) in translate_data and not message.content.startswith(("!", ".")):
         text_to_translate = message.content.strip()
-        # Avoid attempting to translate empty text, pure links, or just pings
+        # Ignore empty text, pure URLs, or just Discord mentions/emojis
         if text_to_translate and not re.fullmatch(r'<[#@:]\d+>|https?://\S+', text_to_translate):
             try:
                 url = "https://translate.googleapis.com/translate_a/single"
@@ -1375,18 +1375,20 @@ async def on_message(message):
                             data = await response.json()
                             detected_lang = data[2]
                             
-                            # 'en' is English, 'und' is undefined (usually just emojis or gibberish)
+                            # 'en' = English, 'und' = undefined (usually emotes/gibberish)
                             if detected_lang and detected_lang.lower() not in ['en', 'und']:
                                 translated_text = "".join([sentence[0] for sentence in data[0] if sentence[0]])
                                 
-                                # Make sure it actually changed before sending (prevents spamming identical text)
+                                # Only send if it actually translated something differently
                                 if translated_text.lower().strip() != text_to_translate.lower().strip():
                                     await message.reply(
                                         f"**Translated ({detected_lang} -> en):**\n{translated_text}", 
-                                        allowed_mentions=discord.AllowedMentions.none()
+                                        mention_author=False  # <--- THIS PREVENTS THE PING
                                     )
             except Exception as e:
                 print(f"Auto-translate error: {e}")
+
+    
 
     # --- SHADOW AI THREAD HANDLING ---
     if message.channel.id in active_shadow_threads and not message.content.startswith(("!", ".")):
