@@ -59,7 +59,7 @@ TESTER_KEYS_FILE = os.path.join(DATA_DIR, "tester_keys.json")
 SHADOW_THREADS_FILE = os.path.join(DATA_DIR, "shadow_threads.json")
 HWID_COOLDOWNS_FILE = os.path.join(DATA_DIR, "hwid_cooldowns.json")
 PGLOCK_FILE = os.path.join(DATA_DIR, "pglock.json")
-
+TRANSLATE_FILE = os.path.join(DATA_DIR, "translate.json") # <--- ADD THIS LINE
 # Auto-generate umarizz.json if it's missing (with the fixed syntax)
 UMARIZZ_DEFAULT_DATA = {
   "umamusume_pickup_lines": [
@@ -1346,6 +1346,47 @@ async def on_message_delete(message):
 async def on_message(message):
     if message.author.bot: 
         return
+       
+    @bot.event
+async def on_message(message):
+    if message.author.bot: 
+        return
+        
+    # --- AUTO TRANSLATE ---
+    translate_data = load_json(TRANSLATE_FILE, dict)
+    is_translate_cmd = message.content.lower().startswith(("!sedse translate", "!translate", "!autotranslate"))
+    
+    if not is_translate_cmd and str(message.channel.id) in translate_data and not message.content.startswith(("!", ".")):
+        text_to_translate = message.content.strip()
+        # Avoid attempting to translate empty text, pure links, or just pings
+        if text_to_translate and not re.fullmatch(r'<[#@:]\d+>|https?://\S+', text_to_translate):
+            try:
+                url = "https://translate.googleapis.com/translate_a/single"
+                params = {
+                    "client": "gtx",
+                    "sl": "auto",
+                    "tl": "en",
+                    "dt": "t",
+                    "q": text_to_translate
+                }
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url, params=params) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            detected_lang = data[2]
+                            
+                            # 'en' is English, 'und' is undefined (usually just emojis or gibberish)
+                            if detected_lang and detected_lang.lower() not in ['en', 'und']:
+                                translated_text = "".join([sentence[0] for sentence in data[0] if sentence[0]])
+                                
+                                # Make sure it actually changed before sending (prevents spamming identical text)
+                                if translated_text.lower().strip() != text_to_translate.lower().strip():
+                                    await message.reply(
+                                        f"**Translated ({detected_lang} -> en):**\n{translated_text}", 
+                                        allowed_mentions=discord.AllowedMentions.none()
+                                    )
+            except Exception as e:
+                print(f"Auto-translate error: {e}")
 
     # --- SHADOW AI THREAD HANDLING ---
     if message.channel.id in active_shadow_threads and not message.content.startswith(("!", ".")):
@@ -3312,6 +3353,21 @@ async def pglock(ctx, arg1: str, arg2: str = None):
             await ctx.send(f"{member.mention} is already pg locked.")
     except: 
         await ctx.send("can't find that user.")
+
+@bot.command(aliases=["autotranslate"])
+@check_perms("translate", manage_messages=True)
+async def translate(ctx):
+    data = load_json(TRANSLATE_FILE, dict)
+    channel_id = str(ctx.channel.id)
+    
+    if channel_id in data:
+        del data[channel_id]
+        save_json(TRANSLATE_FILE, data)
+        await ctx.send("Auto translate turned off, now you can 用普通話說話")
+    else:
+        data[channel_id] = True
+        save_json(TRANSLATE_FILE, data)
+        await ctx.send("Auto translate turned on, no more arigato and Russian")
 
 @bot.command()
 @check_perms("pglock", manage_messages=True)
