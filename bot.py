@@ -1080,14 +1080,25 @@ class MyBot(commands.Bot):
         intents = discord.Intents.default()
         intents.message_content = True 
         intents.members = True 
-        super().__init__(command_prefix=["!sedse ", "!"], intents=intents)
+        
+        # --- GLOBAL PING RESTRICTION ---
+        # everyone=False: completely disables @everyone and @here pings
+        # roles=False: disables role pings (prevents malicious role pinging)
+        # users=True: allows normal user pings (so commands like !rizz @user still work)
+        safe_mentions = discord.AllowedMentions(everyone=False, roles=False, users=True)
+        
+        super().__init__(
+            command_prefix=["!sedse ", "!"], 
+            intents=intents,
+            allowed_mentions=safe_mentions # Applies the restriction globally
+        )
         self.honeypot_channels = load_honeypots()
 
     async def setup_hook(self):
         self.add_view(JJSView())
         self.add_view(VerifyView())
-        self.add_view(HoneypotView())
-        self.add_view(KeySystemView())
+        self.add_view(HoneypotView()) 
+        self.add_view(KeySystemView()) # Keep this here so your keysystem buttons stay active!
         try:
             await self.tree.sync()
         except Exception as e:
