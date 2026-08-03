@@ -2230,6 +2230,8 @@ async def hakai(ctx, member: discord.Member):
         await send_log(ctx.guild, "user hakai'd", f"**user:** {member.mention}\n**mod:** {ctx.author.mention}", discord.Color.dark_purple())
     except discord.Forbidden: await ctx.send("don't have perms.")
 
+import urllib.parse
+
 @bot.command(aliases=["pin", "pinterest"])
 async def pinsearch(ctx, *, query: str = None):
     if not query:
@@ -2259,24 +2261,23 @@ async def pinsearch(ctx, *, query: str = None):
             # Load Pinterest
             await page.goto(url, timeout=15000, wait_until="domcontentloaded")
             
-            # Wait 2 seconds to let React and the images fully populate
-            await asyncio.sleep(2) 
+            # Scroll down slightly to force Pinterest to lazy-load more images
+            await page.evaluate("window.scrollBy(0, 1000);")
+            await asyncio.sleep(2.5) 
             
-            # Extract images using JS evaluation
+            # Extract images
             js_extract = r"""
             () => {
-                let imgs = Array.from(document.querySelectorAll('img'));
                 let validUrls = [];
-                for (let img of imgs) {
+                for (let img of document.images) {
                     let src = img.src;
-                    // Ensure it's a Pinterest image, but skip UI avatars (like 75x75)
-                    if (src && src.includes('pinimg.com') && !src.includes('75x75') && !src.includes('profile')) {
-                        // Force the URL to upgrade from a thumbnail (236x) to high resolution (736x)
-                        let highRes = src.replace(/\/\d+x\//, '/736x/');
+                    // Target the actual pin thumbnails (usually 236x or 474x)
+                    if (src && src.includes('pinimg.com') && (src.includes('/236x/') || src.includes('/474x/'))) {
+                        // Standardize to 736x for the initial fetch list
+                        let highRes = src.replace(/\/(236x|474x)\//, '/736x/');
                         validUrls.push(highRes);
                     }
                 }
-                // Filter duplicates and return exactly 9 images
                 return [...new Set(validUrls)].slice(0, 9);
             }
             """
@@ -2286,24 +2287,39 @@ async def pinsearch(ctx, *, query: str = None):
             await context.close()
 
         if not image_urls:
-            return await msg.edit(content="❌ couldn't find any images for that query. Pinterest might be blocking the request.")
+            return await msg.edit(content="couldn't find any images for that query. Pinterest might be blocking the request.")
 
-        # Build up to 9 Embeds
-        embeds = []
-        for i, img_url in enumerate(image_urls):
-            # Giving them all the same `url` tells Discord to group them into a cohesive grid!
-            embed = discord.Embed(url=url) 
-            
-            # Only put the title and color on the very first embed so the grid looks clean
-            if i == 0:
-                embed.title = f"📍 Pinterest Search: {query}"
-                embed.color = 0xE60023 # Official Pinterest Red
-            
-            embed.set_image(url=img_url)
-            embeds.append(embed)
+        await msg.edit(content="⏳ downloading high-quality images...")
+        
+        files = []
+        async with aiohttp.ClientSession() as session:
+            for idx, base_url in enumerate(image_urls):
+                # Upgrade the URL to the absolute highest uncompressed quality
+                original_url = base_url.replace('/736x/', '/originals/')
+                
+                try:
+                    # 1. Try fetching the original masterpiece
+                    async with session.get(original_url, timeout=5) as resp:
+                        if resp.status == 200:
+                            data = await resp.read()
+                            files.append(discord.File(io.BytesIO(data), filename=f"image_{idx}.jpg"))
+                            continue # Successfully got the original, skip to next image
+                            
+                    # 2. If 'originals/' fails (403 Forbidden), safely fallback to '736x'
+                    async with session.get(base_url, timeout=5) as fallback_resp:
+                        if fallback_resp.status == 200:
+                            data = await fallback_resp.read()
+                            files.append(discord.File(io.BytesIO(data), filename=f"image_{idx}.jpg"))
+                            
+                except Exception as e:
+                    print(f"Failed to download image {base_url}: {e}")
 
-        # Edit the original message to show the grid
-        await msg.edit(content=None, embeds=embeds)
+        if not files:
+            return await msg.edit(content="❌ failed to download the images from pinterest.")
+
+        # Delete the "searching" message and send the gorgeous grid!
+        await msg.delete()
+        await ctx.send(content=f"Successfully searched for **{query}**.", files=files)
 
     except Exception as e:
         print(f"Pinterest command error: {e}")
