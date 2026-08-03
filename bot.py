@@ -3263,6 +3263,30 @@ async def create_testkey(ctx, duration_str: str, member: discord.Member = None):
             await ctx.send(f"test key generated but failed to send to DMs. here is the key: `{new_key}`", delete_after=15)
 
 @bot.command()
+@commands.is_owner()
+async def startbrowser(ctx):
+    global playwright_instance, browser_instance
+    msg = await ctx.send("⚙️ Attempting to launch the Playwright browser engine...")
+    
+    try:
+        # Start playwright if it hasn't been started yet
+        if not playwright_instance:
+            playwright_instance = await async_playwright().start()
+        
+        # Close old instance if it's somehow stuck
+        if browser_instance:
+            await browser_instance.close()
+            
+        browser_instance = await playwright_instance.chromium.launch(
+            headless=True,
+            args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu', '--disable-dev-shm-usage']
+        )
+        await msg.edit(content="✅ **Browser engine launched successfully!** The `browse`, `research`, and `pinsearch` commands should work now.")
+        
+    except Exception as e:
+        await msg.edit(content=f"❌ **Failed to launch Playwright.**\n\nIf you are on Railway/VPS, you probably need to install the browser.\n**Exact Error:**\n```\n{e}\n```")
+
+@bot.command()
 async def tzuquote(ctx, *, sentence: str = None):
     if not sentence:
         return await ctx.send("you gotta give me a quote. try `!sedse tzuquote I never said this.`")
