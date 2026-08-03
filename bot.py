@@ -2235,17 +2235,17 @@ import urllib.parse
 @bot.command(aliases=["pin", "pinterest"])
 async def pinsearch(ctx, *, query: str = None):
     if not query:
-        return await ctx.send("you gotta give me something to search for! try `!sedse pinsearch cyberpunk city`")
+        return await ctx.send("vro gotta give me something to search for! try `!sedse pinsearch hot baes`")
 
     # Enforce quota so people don't spam the browser instance
     if not await check_and_increment_quota(ctx, "research"):
-        return await ctx.send(f"{ctx.author.mention}, bro you hit your daily limit for browser/research commands. come back tomorrow.")
+        return await ctx.send(f"{ctx.author.mention}, vro you hit your daily limit for browser/research commands. come back tomorrow.")
 
     global browser_instance
     if not browser_instance:
         return await ctx.send("the browser engine isn't ready.")
 
-    msg = await ctx.reply(f"🔍 searching pinterest for `{query}`...", allowed_mentions=discord.AllowedMentions.none())
+    msg = await ctx.reply(f"hold up searching pinterest for `{query}`...", allowed_mentions=discord.AllowedMentions.none())
 
     try:
         safe_query = urllib.parse.quote(query)
@@ -2287,9 +2287,9 @@ async def pinsearch(ctx, *, query: str = None):
             await context.close()
 
         if not image_urls:
-            return await msg.edit(content="couldn't find any images for that query. Pinterest might be blocking the request.")
+            return await msg.edit(content="couldn't find any images for that query. pinterest blocked you bih")
 
-        await msg.edit(content="⏳ downloading high-quality images...")
+        await msg.edit(content="downloading grr grr..")
         
         files = []
         async with aiohttp.ClientSession() as session:
@@ -2324,6 +2324,100 @@ async def pinsearch(ctx, *, query: str = None):
     except Exception as e:
         print(f"Pinterest command error: {e}")
         await msg.edit(content=f"an error occurred while searching: {e}", allowed_mentions=discord.AllowedMentions.none())
+
+@bot.command()
+async def lionquote(ctx, *, sentence: str = None):
+    if not sentence:
+        return await ctx.send("you gotta give me a quote. try `!sedse lionquote I was born in the dark.`")
+
+    # IMPORTANT: Make sure to save the image you just uploaded as "lion_template.jpg" in your bot folder!
+    template_path = "lion_template.jpg"
+    font_path = "roboto.ttf"
+
+    if not os.path.exists(template_path):
+        return await ctx.send("❌ template image (`lion_template.jpg`) is missing from the files! Upload it to GitHub/Railway.")
+    if not os.path.exists(font_path):
+        return await ctx.send("❌ font file (`roboto.ttf`) is missing from the files! Upload it to GitHub.")
+
+    msg = await ctx.send("generating alpha wisdom...")
+
+    try:
+        img = Image.open(template_path).convert("RGB")
+        draw = ImageDraw.Draw(img)
+        img_w, img_h = img.size
+
+        # --- STRICT BOUNDARIES FOR THE LION IMAGE ---
+        # 1. Force text to start exactly 5% from the left edge (keeps it away from the absolute border).
+        safe_x = int(img_w * 0.05)
+        # 2. Maximum width is exactly 48% of the image (forces it to stay on the black side, away from the lion).
+        safe_max_width = int(img_w * 0.48) 
+        # 3. Maximum height allowed for the entire text block.
+        safe_max_height = int(img_h * 0.85) 
+
+        # --- DYNAMIC FONT SIZING ---
+        # Start with a reasonably large size based on the image's height
+        max_font_size = int(img_h * 0.15) 
+        min_font_size = 15
+        font_size = max_font_size
+
+        formatted_quote = ""
+        quote_font = None
+        total_height = 0
+
+        # Loop to shrink the font until it fits perfectly inside the safe box bounds
+        while font_size >= min_font_size:
+            quote_font = ImageFont.truetype(font_path, font_size)
+
+            # Word wrapping by PIXEL width, not character count
+            lines = []
+            words = f'"{sentence}"'.split()
+            current_line = ""
+            
+            # Check if a single huge word is too wide for the box
+            longest_word_width = max([draw.textlength(w, font=quote_font) for w in words] + [0])
+            if longest_word_width > safe_max_width:
+                font_size -= 2
+                continue # Shrink font and try again
+
+            # Pack words into lines
+            for word in words:
+                test_line = current_line + " " + word if current_line else word
+                if draw.textlength(test_line, font=quote_font) <= safe_max_width:
+                    current_line = test_line
+                else:
+                    lines.append(current_line)
+                    current_line = word
+            if current_line:
+                lines.append(current_line)
+            
+            formatted_quote = "\n".join(lines)
+
+            # Measure resulting text block height
+            quote_bbox = draw.multiline_textbbox((0, 0), formatted_quote, font=quote_font)
+            total_height = quote_bbox[3] - quote_bbox[1]
+            
+            if total_height <= safe_max_height:
+                break # It fits perfectly, break the loop!
+            
+            font_size -= 2 # Doesn't fit? Shrink and loop again
+
+        # --- DRAWING ---
+        # Center the entire text block vertically
+        start_y = (img_h - total_height) // 2
+
+        # Draw the quote
+        draw.multiline_text((safe_x, start_y), formatted_quote, font=quote_font, fill="white", align="left")
+
+        # --- SAVE AND SEND ---
+        buffer = io.BytesIO()
+        img.save(buffer, format="JPEG", quality=95)
+        buffer.seek(0)
+
+        await msg.delete()
+        await ctx.send(file=discord.File(fp=buffer, filename="lionquote.jpg"))
+
+    except Exception as e:
+        await msg.edit(content=f"an error occurred while generating: {e}")
 
 @bot.command()
 async def badapple(ctx, action: str = "start"):
