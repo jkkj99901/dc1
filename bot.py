@@ -1086,7 +1086,8 @@ class MyBot(commands.Bot):
     async def setup_hook(self):
         self.add_view(JJSView())
         self.add_view(VerifyView())
-        self.add_view(HoneypotView()) 
+        self.add_view(HoneypotView())
+        self.add_view(KeySystemView())
         try:
             await self.tree.sync()
         except Exception as e:
@@ -2228,6 +2229,85 @@ async def hakai(ctx, member: discord.Member):
         await ctx.send(f"hakai'd {member.mention}. wiped {len(roles_to_remove)} roles from existence.")
         await send_log(ctx.guild, "user hakai'd", f"**user:** {member.mention}\n**mod:** {ctx.author.mention}", discord.Color.dark_purple())
     except discord.Forbidden: await ctx.send("don't have perms.")
+
+@bot.command(aliases=["pin", "pinterest"])
+async def pinsearch(ctx, *, query: str = None):
+    if not query:
+        return await ctx.send("you gotta give me something to search for! try `!sedse pinsearch cyberpunk city`")
+
+    # Enforce quota so people don't spam the browser instance
+    if not await check_and_increment_quota(ctx, "research"):
+        return await ctx.send(f"{ctx.author.mention}, bro you hit your daily limit for browser/research commands. come back tomorrow.")
+
+    global browser_instance
+    if not browser_instance:
+        return await ctx.send("the browser engine isn't ready.")
+
+    msg = await ctx.reply(f"🔍 searching pinterest for `{query}`...", allowed_mentions=discord.AllowedMentions.none())
+
+    try:
+        safe_query = urllib.parse.quote(query)
+        url = f"https://www.pinterest.com/search/pins/?q={safe_query}"
+
+        context = await browser_instance.new_context(
+            viewport={'width': 1280, 'height': 720}, 
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        )
+        page = await context.new_page()
+        
+        try:
+            # Load Pinterest
+            await page.goto(url, timeout=15000, wait_until="domcontentloaded")
+            
+            # Wait 2 seconds to let React and the images fully populate
+            await asyncio.sleep(2) 
+            
+            # Extract images using JS evaluation
+            js_extract = r"""
+            () => {
+                let imgs = Array.from(document.querySelectorAll('img'));
+                let validUrls = [];
+                for (let img of imgs) {
+                    let src = img.src;
+                    // Ensure it's a Pinterest image, but skip UI avatars (like 75x75)
+                    if (src && src.includes('pinimg.com') && !src.includes('75x75') && !src.includes('profile')) {
+                        // Force the URL to upgrade from a thumbnail (236x) to high resolution (736x)
+                        let highRes = src.replace(/\/\d+x\//, '/736x/');
+                        validUrls.push(highRes);
+                    }
+                }
+                // Filter duplicates and return exactly 9 images
+                return [...new Set(validUrls)].slice(0, 9);
+            }
+            """
+            image_urls = await page.evaluate(js_extract)
+        finally:
+            await page.close()
+            await context.close()
+
+        if not image_urls:
+            return await msg.edit(content="❌ couldn't find any images for that query. Pinterest might be blocking the request.")
+
+        # Build up to 9 Embeds
+        embeds = []
+        for i, img_url in enumerate(image_urls):
+            # Giving them all the same `url` tells Discord to group them into a cohesive grid!
+            embed = discord.Embed(url=url) 
+            
+            # Only put the title and color on the very first embed so the grid looks clean
+            if i == 0:
+                embed.title = f"📍 Pinterest Search: {query}"
+                embed.color = 0xE60023 # Official Pinterest Red
+            
+            embed.set_image(url=img_url)
+            embeds.append(embed)
+
+        # Edit the original message to show the grid
+        await msg.edit(content=None, embeds=embeds)
+
+    except Exception as e:
+        print(f"Pinterest command error: {e}")
+        await msg.edit(content=f"an error occurred while searching: {e}", allowed_mentions=discord.AllowedMentions.none())
 
 @bot.command()
 async def badapple(ctx, action: str = "start"):
