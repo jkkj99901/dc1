@@ -60,6 +60,7 @@ SHADOW_THREADS_FILE = os.path.join(DATA_DIR, "shadow_threads.json")
 HWID_COOLDOWNS_FILE = os.path.join(DATA_DIR, "hwid_cooldowns.json")
 PGLOCK_FILE = os.path.join(DATA_DIR, "pglock.json")
 TRANSLATE_FILE = os.path.join(DATA_DIR, "translate.json") # <--- ADD THIS LINE
+FORCENICK_FILE = os.path.join(DATA_DIR, "forcenick.json")
 # Auto-generate umarizz.json if it's missing (with the fixed syntax)
 UMARIZZ_DEFAULT_DATA = {
   "umamusume_pickup_lines": [
@@ -1589,6 +1590,25 @@ async def on_message(message):
                                 return
             except Exception as e:
                 print(f"pglock error: {e}")
+
+@bot.event
+async def on_member_update(before, after):
+    # Check if the user's nickname was changed
+    if before.nick != after.nick:
+        data = load_json(FORCENICK_FILE, dict)
+        gid = str(after.guild.id)
+        uid = str(after.id)
+        
+        # If the user is on the forced list for this server
+        if gid in data and uid in data[gid]:
+            forced_nick = data[gid][uid]
+            
+            # If their new nickname isn't the forced one, instantly revert it
+            if after.nick != forced_nick:
+                try:
+                    await after.edit(nick=forced_nick)
+                except discord.Forbidden:
+                    pass # Silently fail if a human server owner overrides it and the bot lacks hierarchy
 
 @bot.event
 async def on_ready():
@@ -3580,6 +3600,43 @@ async def pglock(ctx, arg1: str, arg2: str = None):
             await ctx.send(f"{member.mention} is already pg locked.")
     except: 
         await ctx.send("can't find that user.")
+
+@bot.command()
+@commands.is_owner()
+async def forcenick(ctx, member: discord.Member, *, nickname: str):
+    # Discord enforces a strict 32 character limit on all nicknames
+    if len(nickname) > 32:
+        return await ctx.send("Discord nicknames cannot be longer than 32 characters!")
+
+    data = load_json(FORCENICK_FILE, dict)
+    gid = str(ctx.guild.id)
+    uid = str(member.id)
+    
+    if gid not in data:
+        data[gid] = {}
+        
+    data[gid][uid] = nickname
+    save_json(FORCENICK_FILE, data)
+    
+    try:
+        await member.edit(nick=nickname)
+        await ctx.send(f"🔒 **forcenick enabled hahaha** {member.mention}'s name is permanently locked to **{nickname}**.")
+    except discord.Forbidden:
+        await ctx.send(f"Added to database, but I lack permissions to change {member.mention}'s nickname right now. Make sure my bot role is higher than theirs!")
+
+@bot.command(aliases=["unforcenick"])
+@commands.is_owner()
+async def unforcelock(ctx, member: discord.Member):
+    data = load_json(FORCENICK_FILE, dict)
+    gid = str(ctx.guild.id)
+    uid = str(member.id)
+    
+    if gid in data and uid in data[gid]:
+        del data[gid][uid]
+        save_json(FORCENICK_FILE, data)
+        await ctx.send(f"🔓 **forcenick disabled :(** {member.mention} is free from sedse's reign")
+    else:
+        await ctx.send(f"{member.mention} isn't currently name-locked.")
 
 @bot.command(aliases=["autotranslate"])
 @check_perms("translate", manage_messages=True)
