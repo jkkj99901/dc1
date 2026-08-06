@@ -2684,14 +2684,24 @@ async def play(ctx, *, query: str = None):
 
     player: wavelink.Player = ctx.voice_client
     if not player:
-        player = await ctx.author.voice.channel.connect(cls=wavelink.Player)
-        player.autoplay = wavelink.AutoPlayMode.partial
+        try:
+            player = await ctx.author.voice.channel.connect(cls=wavelink.Player, timeout=20.0)
+            player.autoplay = wavelink.AutoPlayMode.partial
+        except Exception as e:
+            return await ctx.send(f"Failed to join voice channel: {e}")
 
     player.home = ctx.channel
     msg = await ctx.send(f"Searching for media...")
 
     try:
-        tracks: wavelink.Search = await wavelink.Playable.search(query)
+        # If it's a raw link, search directly. If it's a text search, search SoundCloud first to bypass YouTube Railway IP bans!
+        if query.startswith("http://") or query.startswith("https://"):
+            tracks: wavelink.Search = await wavelink.Playable.search(query)
+        else:
+            tracks: wavelink.Search = await wavelink.Playable.search(f"scsearch:{query}")
+            if not tracks:
+                tracks = await wavelink.Playable.search(f"ytsearch:{query}")
+                
     except Exception as e:
         return await msg.edit(content=f"Error searching: {e}")
 
