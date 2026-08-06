@@ -1120,23 +1120,17 @@ class MyBot(commands.Bot):
         
         # --- WAVELINK NODE SETUP (LAVALINK) ---
         nodes = [
-            # Your NEW Railway Lavalink Node
+            # Your active, working Railway Lavalink Node
             wavelink.Node(
                 identifier="Sedse-Private-Node",
                 uri="https://lavalink-production-6481.up.railway.app:443", 
-                password="sedsemusic2026" # Make sure this matches the password in your application.yml!
-            ),
-            # Public Fallback Node (keeps bot playing if your node ever restarts)
-            wavelink.Node(
-                identifier="Public-Fallback",
-                uri="https://lava.link:443", 
-                password="youshallnotpass"
+                password="sedsemusic2026"
             )
         ]
         
         try:
             await wavelink.Pool.connect(nodes=nodes, client=self)
-            print("Successfully connected to Lavalink nodes!")
+            print("Successfully connected to Lavalink node!")
         except Exception as e:
             print(f"Failed to connect to Lavalink: {e}")
 
