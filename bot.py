@@ -3440,6 +3440,88 @@ async def create_testkey(ctx, duration_str: str, member: discord.Member = None):
         else:
             await ctx.send(f"test key generated but failed to send to DMs. here is the key: `{new_key}`", delete_after=15)
 
+@bot.hybrid_command(name="keys", description="View all keys redeemed by a user (Owner only)")
+@commands.is_owner()
+@app_commands.describe(member="The user to check keys for (leave blank for yourself)")
+async def keys(ctx, member: discord.Member = None):
+    target = member or ctx.author
+    
+    # Acknowledge the interaction to prevent timeout if it's a slash command
+    if ctx.interaction:
+        await ctx.interaction.response.defer(ephemeral=True)
+        
+    data = await supabase_request("GET", f"keys?discord_id=eq.{target.id}&select=*")
+    
+    if not data:
+        msg = f"❌ **{target.display_name}** has no keys linked to their account."
+        if ctx.interaction:
+            return await ctx.interaction.followup.send(msg, ephemeral=True)
+        return await ctx.send(msg, delete_after=10)
+        
+    embed = discord.Embed(title=f"🔑 SEDSE Keys for {target.display_name}", color=0x5aabf2)
+    
+    for k in data[:15]:
+        key_val = k['key_value']
+        hwid_status = f"`{k['hwid']}`" if k.get("hwid") else "`unbound`"
+        
+        status = "expired"
+        if k.get("expires_at"):
+            exp = datetime.fromisoformat(k["expires_at"].replace('Z', '+00:00'))
+            if datetime.now(timezone.utc) <= exp:
+                status = "active"
+        elif k.get("is_active"):
+            status = "lifetime"
+            
+        exp_str = "lifetime"
+        if k.get("expires_at"):
+            exp_time = int(datetime.fromisoformat(k["expires_at"].replace('Z', '+00:00')).timestamp())
+            exp_str = f"<t:{exp_time}:R>"
+            
+        embed.add_field(
+            name=f"Key: `{key_val}`", 
+            value=f"**Status:** {status}\n**HWID:** {hwid_status}\n**Expires:** {exp_str}", 
+            inline=False
+        )
+        
+    if len(data) > 15:
+        embed.set_footer(text=f"Showing 15 out of {len(data)} total keys.")
+        
+    if ctx.interaction:
+        await ctx.interaction.followup.send(embed=embed, ephemeral=True)
+    else:
+        # Fallback: Auto-delete after 30 seconds if used as a prefix command
+        await ctx.send(embed=embed, delete_after=30)
+
+
+@bot.hybrid_command(name="resethwid", description="Reset the HWID of a specific key (Owner only)")
+@commands.is_owner()
+@app_commands.describe(key="The full key to reset")
+async def resethwid(ctx, key: str):
+    if ctx.interaction:
+        await ctx.interaction.response.defer(ephemeral=True)
+        
+    data = await supabase_request("GET", f"keys?key_value=eq.{key}&select=*")
+        
+    if not data:
+        msg = "Invalid key. It does not exist in the database."
+        if ctx.interaction:
+            return await ctx.interaction.followup.send(msg, ephemeral=True)
+        return await ctx.send(msg, delete_after=10)
+
+    # Force reset the HWID
+    updated = await supabase_request("PATCH", f"keys?key_value=eq.{key}", {"hwid": None})
+    
+    if updated:
+        msg = f" **HWID Reset Successful!**\nThe next injection for `{key}` will securely lock to the new device."
+    else:
+        msg = "Database error. Failed to reset HWID."
+        
+    if ctx.interaction:
+        await ctx.interaction.followup.send(msg, ephemeral=True)
+    else:
+        # Fallback: Auto-delete after 15 seconds if used as a prefix command
+        await ctx.send(msg, delete_after=15)
+
 @bot.command(aliases=["cap"])
 async def caption(ctx, *, text: str = None):
     if not text:
