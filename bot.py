@@ -2691,27 +2691,26 @@ async def play(ctx, *, query: str = None):
             return await ctx.send(f"Failed to join voice channel: {e}")
 
     player.home = ctx.channel
-    msg = await ctx.send(f"Searching...")
+    msg = await ctx.send(f" Searching...")
 
     try:
-        # 1. Check if the user pasted a direct link (YouTube, Spotify, SoundCloud URL)
+        # 1. Check if the user pasted a direct link
         if query.startswith("http://") or query.startswith("https://"):
             tracks: wavelink.Search = await wavelink.Playable.search(query)
             
-        # 2. If it's just text (e.g., "post malone circles"), force SoundCloud search!
+        # 2. If it's a text search, natively force SoundCloud to completely bypass YouTube bans!
         else:
-            # SoundCloud search is fast, accurate, and completely immune to Railway IP bans.
-            tracks: wavelink.Search = await wavelink.Playable.search(f"scsearch:{query}")
+            tracks: wavelink.Search = await wavelink.Playable.search(query, source=wavelink.TrackSource.SoundCloud)
             
-            # If SoundCloud somehow fails, try YouTube Music search as a backup
+            # Safe fallback to YouTube Music just in case
             if not tracks:
-                tracks = await wavelink.Playable.search(f"ytmsearch:{query}")
+                tracks = await wavelink.Playable.search(query, source=wavelink.TrackSource.YouTubeMusic)
 
     except Exception as e:
         return await msg.edit(content=f" Error searching: {e}")
 
     if not tracks:
-        return await msg.edit(content="No results found. Try using a direct YouTube/SoundCloud link instead.")
+        return await msg.edit(content=" No results found. Try a different search term.")
 
     # Handle Playlists
     if isinstance(tracks, wavelink.Playlist):
@@ -2719,7 +2718,7 @@ async def play(ctx, *, query: str = None):
             t.requester_id = ctx.author.id 
             
         added = await player.queue.put_wait(tracks)
-        await msg.edit(content=f"🎶 Added playlist **{tracks.name}** ({added} songs) to queue.")
+        await msg.edit(content=f"Added playlist **{tracks.name}** ({added} songs) to queue.")
         if not player.playing:
             await player.play(player.queue.get())
             
