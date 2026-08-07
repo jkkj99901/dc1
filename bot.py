@@ -2691,34 +2691,39 @@ async def play(ctx, *, query: str = None):
             return await ctx.send(f"Failed to join voice channel: {e}")
 
     player.home = ctx.channel
-    msg = await ctx.send(f"Searching for media...")
+    msg = await ctx.send(f"Searching...")
 
     try:
-        # 1. Try standard search / direct link
-        tracks: wavelink.Search = await wavelink.Playable.search(query)
-        
-        # 2. If no tracks found, attempt SoundCloud search as a fallback
-        if not tracks and not (query.startswith("http://") or query.startswith("https://")):
-            tracks = await wavelink.Playable.search(f"scsearch:{query}")
-                
+        # 1. Check if the user pasted a direct link (YouTube, Spotify, SoundCloud URL)
+        if query.startswith("http://") or query.startswith("https://"):
+            tracks: wavelink.Search = await wavelink.Playable.search(query)
+            
+        # 2. If it's just text (e.g., "post malone circles"), force SoundCloud search!
+        else:
+            # SoundCloud search is fast, accurate, and completely immune to Railway IP bans.
+            tracks: wavelink.Search = await wavelink.Playable.search(f"scsearch:{query}")
+            
+            # If SoundCloud somehow fails, try YouTube Music search as a backup
+            if not tracks:
+                tracks = await wavelink.Playable.search(f"ytmsearch:{query}")
+
     except Exception as e:
-        # Fallback search if YouTube throws an exception
-        try:
-            tracks = await wavelink.Playable.search(f"scsearch:{query}")
-        except Exception:
-            return await msg.edit(content=f"Error searching: {e}")
+        return await msg.edit(content=f" Error searching: {e}")
 
     if not tracks:
-        return await msg.edit(content="No results found for that search or file.")
+        return await msg.edit(content="No results found. Try using a direct YouTube/SoundCloud link instead.")
 
+    # Handle Playlists
     if isinstance(tracks, wavelink.Playlist):
         for t in tracks:
             t.requester_id = ctx.author.id 
             
         added = await player.queue.put_wait(tracks)
-        await msg.edit(content=f"Added playlist **{tracks.name}** ({added} songs) to queue.")
+        await msg.edit(content=f"🎶 Added playlist **{tracks.name}** ({added} songs) to queue.")
         if not player.playing:
             await player.play(player.queue.get())
+            
+    # Handle Single Tracks
     else:
         track: wavelink.Playable = tracks[0]
         track.requester_id = ctx.author.id 
