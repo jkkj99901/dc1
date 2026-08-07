@@ -3440,6 +3440,154 @@ async def create_testkey(ctx, duration_str: str, member: discord.Member = None):
         else:
             await ctx.send(f"test key generated but failed to send to DMs. here is the key: `{new_key}`", delete_after=15)
 
+@bot.command(aliases=["cap"])
+async def caption(ctx, *, text: str = None):
+    if not text:
+        return await ctx.send("you gotta provide some text for the caption vro, try `!sedse caption sedse is so sexy`")
+
+    target_message = ctx.message
+    
+    # Check if the user is replying to another message
+    if ctx.message.reference and ctx.message.reference.resolved:
+        target_message = ctx.message.reference.resolved
+        
+    url = None
+    # 1. Check for standard image/gif attachments
+    if target_message.attachments:
+        url = target_message.attachments[0].url
+    # 2. Check if the message contains an embed with an image (like a Tenor GIF link)
+    elif target_message.embeds and target_message.embeds[0].image:
+        url = target_message.embeds[0].image.url
+    elif target_message.embeds and target_message.embeds[0].url and target_message.embeds[0].url.lower().endswith(('gif', 'png', 'jpg', 'jpeg')):
+        url = target_message.embeds[0].url
+
+    if not url:
+        return await ctx.send("dumass you need to attach an image/gif or reply to a message that has one")
+
+    msg = await ctx.reply("**generating caption...**", allowed_mentions=discord.AllowedMentions.none())
+
+    try:
+        # Download the image into memory
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as resp:
+                if resp.status != 200:
+                    return await msg.edit(content=" failed to download the image/gif.")
+                image_data = await resp.read()
+
+        img = Image.open(io.BytesIO(image_data))
+        is_gif = img.format == 'GIF' or getattr(img, "is_animated", False)
+        
+        width, original_height = img.size
+        
+        # --- Locate Font ---
+        font_path = "futaru.ttf"
+        if not os.path.exists(font_path):
+            font_path = "futaru.otf" # Try OTF if TTF doesn't exist
+            if not os.path.exists(font_path):
+                font_path = "roboto.ttf" # Safe fallback to your existing font
+                if not os.path.exists(font_path):
+                    return await msg.edit(content="font `futaru.ttf` (or `roboto.ttf`) is missing from the files!")
+
+        # Dynamic font sizing: ~8% of the image width
+        font_size = max(int(width * 0.08), 20)
+        
+        # Cap font size to avoid gigantic text on 4K images
+        if font_size > 70:
+            font_size = 70
+            
+        font = ImageFont.truetype(font_path, font_size)
+        
+        # --- Text Wrapping Logic ---
+        draw_measure = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+        margin = int(width * 0.05)
+        max_text_width = width - (margin * 2)
+        
+        words = text.split()
+        lines = []
+        current_line = []
+        
+        # Loop through words and pack them into lines that fit the image width
+        for word in words:
+            test_line = " ".join(current_line + [word])
+            if draw_measure.textlength(test_line, font=font) <= max_text_width:
+                current_line.append(word)
+            else:
+                if current_line:
+                    lines.append(" ".join(current_line))
+                    current_line = [word]
+                else:
+                    # If a single word is insanely long, force it onto its own line
+                    lines.append(word)
+        if current_line:
+            lines.append(" ".join(current_line))
+
+        # --- Calculate Total Caption Box Height ---
+        bbox = font.getbbox("A")
+        line_height = bbox[3] - bbox[1]
+        line_spacing = int(font_size * 0.2)
+        
+        total_text_height = (len(lines) * line_height) + ((len(lines) - 1) * line_spacing)
+        caption_height = total_text_height + (margin * 2)
+        
+        # --- Draw the White Caption Bar ---
+        caption_bar = Image.new("RGBA", (width, caption_height), "white")
+        c_draw = ImageDraw.Draw(caption_bar)
+        
+        y_text = margin
+        for line in lines:
+            line_w = c_draw.textlength(line, font=font)
+            x_text = (width - line_w) // 2 # Center text perfectly
+            
+            c_draw.text((x_text, y_text), line, font=font, fill="black")
+            y_text += line_height + line_spacing
+
+        buffer = io.BytesIO()
+
+        # --- Process the Image or GIF ---
+        if is_gif:
+            frames = []
+            durations = []
+            loop_count = img.info.get('loop', 0)
+            
+            # Loop through every single frame of the animation
+            for frame_idx in range(img.n_frames):
+                img.seek(frame_idx)
+                durations.append(img.info.get('duration', 50))
+                
+                frame_rgba = img.convert("RGBA")
+                # Create a blank white canvas (Height = original image + caption bar)
+                new_frame = Image.new("RGBA", (width, original_height + caption_height), "white")
+                
+                # Paste caption on top
+                new_frame.paste(caption_bar, (0, 0))
+                # Paste GIF frame below the caption
+                new_frame.paste(frame_rgba, (0, caption_height), frame_rgba)
+                
+                # Convert back to RGB to prevent transparency glitching in Discord GIFs
+                frames.append(new_frame.convert("RGB"))
+                
+            # Compile frames back into an animated GIF
+            frames[0].save(buffer, format="GIF", save_all=True, append_images=frames[1:], duration=durations, loop=loop_count)
+            filename = "caption.gif"
+        else:
+            # Process static image
+            img_rgba = img.convert("RGBA")
+            new_img = Image.new("RGBA", (width, original_height + caption_height), "white")
+            new_img.paste(caption_bar, (0, 0))
+            new_img.paste(img_rgba, (0, caption_height), img_rgba)
+            
+            new_img = new_img.convert("RGB")
+            new_img.save(buffer, format="JPEG", quality=95)
+            filename = "caption.jpg"
+
+        buffer.seek(0)
+        await msg.delete()
+        await ctx.send(file=discord.File(fp=buffer, filename=filename))
+
+    except Exception as e:
+        print(f"Caption error: {e}")
+        await msg.edit(content=f"an error occurred: {e}", allowed_mentions=discord.AllowedMentions.none())
+
 @bot.command()
 @commands.is_owner()
 async def startbrowser(ctx):
