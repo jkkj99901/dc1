@@ -2694,16 +2694,19 @@ async def play(ctx, *, query: str = None):
     msg = await ctx.send(f"Searching for media...")
 
     try:
-        # If it's a raw link, search directly. If it's a text search, search SoundCloud first to bypass YouTube Railway IP bans!
-        if query.startswith("http://") or query.startswith("https://"):
-            tracks: wavelink.Search = await wavelink.Playable.search(query)
-        else:
-            tracks: wavelink.Search = await wavelink.Playable.search(f"scsearch:{query}")
-            if not tracks:
-                tracks = await wavelink.Playable.search(f"ytsearch:{query}")
+        # 1. Try standard search / direct link
+        tracks: wavelink.Search = await wavelink.Playable.search(query)
+        
+        # 2. If no tracks found, attempt SoundCloud search as a fallback
+        if not tracks and not (query.startswith("http://") or query.startswith("https://")):
+            tracks = await wavelink.Playable.search(f"scsearch:{query}")
                 
     except Exception as e:
-        return await msg.edit(content=f"Error searching: {e}")
+        # Fallback search if YouTube throws an exception
+        try:
+            tracks = await wavelink.Playable.search(f"scsearch:{query}")
+        except Exception:
+            return await msg.edit(content=f"Error searching: {e}")
 
     if not tracks:
         return await msg.edit(content="No results found for that search or file.")
@@ -3258,33 +3261,81 @@ async def tester_key_loop(ctx):
             print(f"tester key loop error: {e}")
             await asyncio.sleep(10) # Safely retry after 10s if database rate-limits
 
+class DeobfSelect(discord.ui.Select):
+    def __init__(self, file_content, filename):
+        self.file_content = file_content
+        self.filename = filename
+        
+        # Adding all the endpoints supported by LeakD
+        options = [
+            discord.SelectOption(label="Detect", description="Auto-detect the obfuscation type", value="detect", emoji="🔍"),
+            discord.SelectOption(label="Moonsec", description="Deobfuscate Moonsec", value="moonsec", emoji="🌙"),
+            discord.SelectOption(label="Prometheus", description="Deobfuscate Prometheus", value="prometheus", emoji="🔥"),
+            discord.SelectOption(label="Ironbrew2", description="Deobfuscate Ironbrew2", value="ironbrew2", emoji="☕"),
+            discord.SelectOption(label="Ironveil", description="Deobfuscate Ironveil", value="ironveil", emoji="🛡️"),
+            discord.SelectOption(label="Hercules", description="Deobfuscate Hercules", value="hercules", emoji="💪"),
+            discord.SelectOption(label="Luaobfuscator", description="Deobfuscate Luaobfuscator", value="luaobfuscator", emoji="🧩"),
+            discord.SelectOption(label="Beautify", description="Format and Beautify Code", value="beautify", emoji="✨")
+        ]
+        super().__init__(placeholder="Select an engine to use...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        # Acknowledge the interaction instantly so it doesn't timeout
+        await interaction.response.defer()
+        endpoint = self.values[0]
+        url = f"https://leakd.up.railway.app/{endpoint}"
+        
+        await interaction.message.edit(content=f"🔄 Processing your script with `{endpoint}`... Please wait.", view=None)
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                # 1. Try sending standard JSON payload
+                resp = await session.post(url, json={"script": self.file_content}, timeout=120)
+                
+                # 2. If it fails (Bad Request), fallback to raw text body
+                if resp.status in [400, 415, 422, 500]:
+                    resp = await session.post(url, data=self.file_content, headers={"Content-Type": "text/plain"}, timeout=120)
+                    
+                # 3. If it STILL fails, try a multipart file upload
+                if resp.status in [400, 415, 422, 500]:
+                    form = aiohttp.FormData()
+                    form.add_field("file", self.file_content.encode("utf-8"), filename=self.filename)
+                    resp = await session.post(url, data=form, timeout=120)
+
+                if resp.status == 200:
+                    content_type = resp.headers.get("Content-Type", "").lower()
+                    
+                    if "application/json" in content_type:
+                        data = await resp.json()
+                        # Extract the deobfuscated script from common JSON return keys
+                        result_code = data.get("script") or data.get("code") or data.get("data") or data.get("result") or data.get("message")
+                        
+                        # If the API returned a complex JSON dict instead of raw code, format it nicely
+                        if not isinstance(result_code, str):
+                            result_code = json.dumps(data, indent=4)
+                    else:
+                        # If it returned raw text directly
+                        result_code = await resp.text()
+
+                    # Put the string back into a file to send to Discord
+                    buffer = io.BytesIO(result_code.encode("utf-8"))
+                    file = discord.File(buffer, filename=f"leakd_{endpoint}_{self.filename}")
+                    
+                    await interaction.message.edit(content=f" **Success!** Engine used: `{endpoint}`", attachments=[file], view=None)
+                else:
+                    error_text = await resp.text()
+                    await interaction.message.edit(content=f" **API Error ({resp.status}):**\n```json\n{error_text[:1900]}\n```", view=None)
+                    
+        except Exception as e:
+            await interaction.message.edit(content=f" **Fatal Error:** {e}", view=None)
+
+class DeobfView(discord.ui.View):
+    def __init__(self, file_content, filename):
+        super().__init__(timeout=120)
+        self.add_item(DeobfSelect(file_content, filename))
+
 @bot.command()
 async def deobf(ctx):
-    # --- 0. AUTO-UNPACK / AUTO-FIX DUMPER SCRIPT ---
-    status, err = check_and_reconstruct_dumper()
-    if not status:
-        return await ctx.send(f"❌ Failed to reconstruct the dumper script:\n`{err}`\n\nMake sure the file `revea.lol_dumped.lua.txt` is uploaded directly to your main GitHub folder.")
-
-    # --- 1. AUTO-INSTALL LUNE IF MISSING ---
-    if not os.path.exists("./lune"):
-        setup_msg = await ctx.send("⚙️ First-time setup: Downloading the Lune engine... please wait a few seconds.")
-        try:
-            url = "https://github.com/lune-org/lune/releases/download/v0.8.8/lune-0.8.8-linux-x86_64.zip"
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url) as resp:
-                    with open("lune.zip", "wb") as f:
-                        f.write(await resp.read())
-            
-            with zipfile.ZipFile("lune.zip", 'r') as zip_ref:
-                zip_ref.extractall(".")
-            os.remove("lune.zip")
-            
-            os.chmod("./lune", os.stat("./lune").st_mode | stat.S_IEXEC)
-            await setup_msg.delete()
-        except Exception as e:
-            return await setup_msg.edit(content=f"❌ Failed to download Lune automatically: {e}")
-
-    # --- 2. DEOBFUSCATION LOGIC ---
     if not ctx.message.attachments:
         return await ctx.send("You need to attach a `.lua` or `.txt` file for me to deobfuscate!")
     
@@ -3296,47 +3347,21 @@ async def deobf(ctx):
     if attachment.size > 2 * 1024 * 1024: # 2 MB limit
         return await ctx.send("File is too large! Please keep it under 2MB.")
 
-    msg = await ctx.send("📥 Downloading and analyzing the script... this might take a minute or two depending on the obfuscation.")
-
-    file_id = str(uuid.uuid4())
-    input_filename = os.path.join(DATA_DIR, f"input_{file_id}.lua")
-    output_filename = os.path.join(DATA_DIR, f"output_{file_id}.lua")
+    msg = await ctx.send("Reading file...")
 
     try:
-        await attachment.save(input_filename)
-
-        # Run Lune using the rebuilt dumper.lua
-        process = await asyncio.create_subprocess_exec(
-            "./lune", "run", "dumper.lua", input_filename, output_filename,
-            stdout=subprocess.PIPE, 
-            stderr=subprocess.PIPE
-        )
-
-        try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=45.0)
-        except asyncio.TimeoutError:
-            process.kill()
-            return await msg.edit(content="❌ Deobfuscation timed out! The script might be malicious, broken, or too heavily obfuscated.")
-
-        if os.path.exists(output_filename) and os.path.getsize(output_filename) > 0:
-            if os.path.getsize(output_filename) > 24 * 1024 * 1024:
-                await msg.edit(content="⚠️ Deobfuscation finished, but the output file is too massive for Discord!")
-            else:
-                await msg.edit(content="✅ **Deobfuscation Complete!** Here is your dumped script:")
-                await ctx.send(file=discord.File(output_filename, filename=f"deobf_{attachment.filename}"))
-        else:
-            error_msg = stderr.decode()[:800] 
-            await msg.edit(content=f"❌ Deobfuscation failed to produce an output.\n**Error Log:**\n```\n{error_msg}\n```")
-
+        # Read the file directly into memory (no need to save it to disk anymore!)
+        file_bytes = await attachment.read()
+        file_content = file_bytes.decode('utf-8')
+        
+        # Display the dropdown menu
+        await msg.edit(content="**Select the obfuscator type below:**", view=DeobfView(file_content, attachment.filename))
+        
+    except UnicodeDecodeError:
+        await msg.edit(content="Could not read the file as text. Make sure it is a valid Lua/Text file.")
     except Exception as e:
-        await msg.edit(content=f"❌ An internal bot error occurred: {e}")
+        await msg.edit(content=f"An error occurred: {e}")
 
-    finally:
-        # Clean up files
-        if os.path.exists(input_filename):
-            os.remove(input_filename)
-        if os.path.exists(output_filename):
-            os.remove(output_filename)        
 @bot.hybrid_command(name="create_testkey", description="generates a custom test key (owner only)")
 @commands.is_owner()
 @app_commands.describe(duration_str="e.g. 12h, 1d, lifetime", member="user to receive the test key (optional)")
